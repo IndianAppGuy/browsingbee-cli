@@ -1,0 +1,23 @@
+{
+  "url": "https://satyabrata.tech",
+  "description": "Verify the projects section loads",
+  "steps": [
+    {
+      "id": 1,
+      "actionType": "Click Element",
+      "details": {
+        "element": "Projects"
+      }
+    },
+    {
+      "id": 2,
+      "actionType": "Delay",
+      "delayTime": 2000
+    },
+    {
+      "id": 3,
+      "actionType": "AI Visual Assertion",
+      "question": "Is the Projects section visible, indicating the projects have loaded properly?"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "url": "https://satyabrata.tech",
+  "description": "Go to experience section and list all the experience listed in the section",
+  "steps": [
+    {
+      "id": 1,
+      "actionType": "Click Element",
+      "details": {
+        "element": "Experience"
+      }
+    },
+    {
+      "id": 2,
+      "actionType": "AI Visual Assertion",
+      "question": "Is the Experience section displayed with a list of experiences?"
+    }
+  ]
+}
