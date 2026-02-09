@@ -1,276 +1,385 @@
 #!/usr/bin/env node
 
-import { Command } from 'commander';
-import chalk from 'chalk';
-import axios from 'axios';
-import ora from 'ora';
-import dotenv from 'dotenv';
-import inquirer from 'inquirer';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
-import { EventSource } from 'eventsource';
+import { Command } from "commander";
+import inquirer from "inquirer";
+import axios from "axios";
+import Conf from "conf";
+import chalk from "chalk";
+import ora from "ora";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const esModule = require("eventsource");
+const EventSource = esModule.EventSource || esModule;
 
-dotenv.config();
-const envPath = path.join(process.cwd(), '.env');
 const program = new Command();
+const config = new Conf({ projectName: "browsing-bee-cli" });
 
-/**
- * Connects to the backend live stream and handles incoming updates.
- */
-function listenToLiveUpdates(backendUrl, testId, options = {}) {
-    const { verbose = false } = options;
-    const outputDir = path.join(options.baseOutputDir || './screenshots', testId);
-
-    if (!fs.existsSync(outputDir)) {
-        fs.mkdirSync(outputDir, { recursive: true });
-    }
-    const sseUrl = `${backendUrl}/api/test-stream/${testId}`;
-
-    // Support for both native fetch/SSE and the polyfill
-    const ES = (typeof globalThis.EventSource !== 'undefined') ? globalThis.EventSource : EventSource;
-    const es = new ES(sseUrl);
-
-    console.log(chalk.blue(`📡 Connecting to live stream: ${sseUrl}`));
-    console.log(chalk.gray(`📂 Saving screenshots to: ${outputDir}`));
-
-    es.onopen = () => {
-        console.log(chalk.green('✅ SSE Connection established!'));
-    };
-
-    es.onmessage = (event) => {
-        console.log(chalk.gray('📩 Received message:'), event.data);
-        const data = JSON.parse(event.data);
-
-        if (data.type === 'log') {
-            const { message, status, timestamp } = data.log;
-            const icon = status === 'success' ? chalk.green('✅') : (status === 'error' ? chalk.red('❌') : chalk.blue('ℹ️'));
-            console.log(`${chalk.gray(`[${timestamp}]`)} ${icon} ${chalk.bold(status.toUpperCase())}: ${message}`);
-        }
-
-        if (data.type === 'screenshot') {
-            const { stepId, url, local, tag } = data;
-
-            // Smart Filtering:
-            // - If verbose is true, save everything.
-            // - Otherwise, ONLY save specific tags (assertion, error, final) or explicit 'highlight'
-            // - We skip standard 'before'/'after' shots unless verbose is on.
-            const isImportant = tag && ['assertion', 'error', 'final', 'highlight'].includes(tag);
-            const shouldSave = verbose || isImportant;
-
-            if (shouldSave) {
-                if (url.startsWith('data:image/png;base64,')) {
-                    const base64Data = url.replace(/^data:image\/png;base64,/, "");
-                    const fileName = `step-${stepId}-${tag || (local ? 'before' : 'after')}.png`;
-                    const filePath = path.join(outputDir, fileName);
-                    fs.writeFileSync(filePath, base64Data, 'base64');
-                    console.log(chalk.gray(`📸 Screenshot saved: ${outputDir}/${fileName}`));
-                } else {
-                    console.log(chalk.gray(`🌐 Remote Screenshot available: ${url}`));
-                }
-            } else if (url.startsWith('data:image/png;base64,')) {
-                // If we skipped it, maybe just log a tiny debug message or nothing to reduce noise
-                // console.log(chalk.gray(`⏭️  Skipped screenshot (verbose=false): step-${stepId}-${tag}`));
-            }
-        }
-
-        if (data.type === 'completed') {
-            es.close();
-        }
-    };
-
-    es.onerror = (err) => {
-        console.log(chalk.red(`❌ SSE Error: ${err.message || 'Connection failed'}`));
-        es.close();
-    };
-
-    return es;
-}
+const BACKEND_URL = "http://localhost:3005"; // Default local development URL
 
 program
-    .name('browsingbee')
-    .description('Developer-centric tool for web automation, research and test generation')
-    .version('1.0.0');
+    .name("browsingbee")
+    .description("CLI for BrowsingBee - Automate your browser tasks")
+    .version("1.0.0");
 
-// browsingbee init
 program
-    .command('init')
-    .description('Setup the connection to the BrowsingBee backend')
-    .action(async () => {
-        const answers = await inquirer.prompt([
-            {
-                type: 'input',
-                name: 'backendUrl',
-                message: 'Enter the BrowsingBee Backend URL:',
-                default: process.env.BACKEND_URL || 'http://localhost:3005'
-            }
-        ]);
+    .command("login")
+    .description("Login with your API Key")
+    .option("--api_key <key>", "Your BrowsingBee API Key")
+    .action(async (options) => {
+        let apiKey = options.api_key;
 
-        const spinner = ora('Verifying connection...').start();
+        if (!apiKey) {
+            const answers = await inquirer.prompt([
+                {
+                    type: "password",
+                    name: "apiKey",
+                    message: "Enter your BrowsingBee API Key:",
+                    validate: (input) => (input ? true : "API Key is required"),
+                },
+            ]);
+            apiKey = answers.apiKey;
+        }
+
+        const spinner = ora("Authenticating...").start();
+
         try {
-            const response = await axios.get(`${answers.backendUrl}/test`, { timeout: 5000 });
-            if (response.status === 200) {
-                spinner.succeed(chalk.green('Connection verified!'));
-
-                const envContent = `BACKEND_URL=${answers.backendUrl}\n`;
-                fs.writeFileSync(envPath, envContent);
-
-                console.log(chalk.blue(`Configuration saved to ${envPath}`));
-            } else {
-                spinner.fail(chalk.red(`Backend returned status ${response.status}`));
-            }
-        } catch (error) {
-            spinner.fail(chalk.red(`Could not connect to backend: ${error.message}`));
-        }
-    });
-
-// browsingbee research <url>
-program
-    .command('research')
-    .description('Understand a website\'s structure')
-    .argument('<url>', 'URL to research')
-    .option('-o, --output <file>', 'Save output to a JSON file')
-    .action(async (url, options) => {
-        const backendUrl = process.env.BACKEND_URL;
-        if (!backendUrl) {
-            console.log(chalk.yellow('Please run "browsingbee init" first.'));
-            return;
-        }
-
-        const spinner = ora(`Researching ${url}...`).start();
-        try {
-            const response = await axios.post(`${backendUrl}/api/instant/research`, { url });
-            spinner.succeed(chalk.green('Research complete!'));
-
-            const data = response.data;
-
-            console.log('\n' + chalk.bold.cyan('=== Research Summary ==='));
-            console.log(chalk.bold('Domain Purpose:'), data.domainPurpose);
-
-            console.log('\n' + chalk.bold('Key UI Elements:'));
-            data.keyUIElements.forEach(item => console.log(` - ${item}`));
-
-            console.log('\n' + chalk.bold('Functional Areas:'));
-            data.functionalAreas.forEach(item => console.log(` - ${item}`));
-
-            console.log('\n' + chalk.bold('AI Summary:'), data.summary);
-
-            if (options.output) {
-                fs.writeFileSync(options.output, JSON.stringify(data, null, 2));
-                console.log(chalk.green(`\nReport saved to ${options.output}`));
-            }
-        } catch (error) {
-            spinner.fail(chalk.red(`Research failed: ${error.message}`));
-            if (error.response) {
-                console.error(chalk.gray(JSON.stringify(error.response.data, null, 2)));
-            }
-        }
-    });
-
-// browsingbee generate <url>
-program
-    .command('generate')
-    .description('Transform a URL into executable test scenarios')
-    .argument('<url>', 'URL to generate tests for')
-    .option('-d, --description <text>', 'Specific intent or description of the test')
-    .option('-o, --output <file>', 'Output filename', 'scenario.json')
-    .action(async (url, options) => {
-        const backendUrl = process.env.BACKEND_URL;
-        if (!backendUrl) {
-            console.log(chalk.yellow('Please run "browsingbee init" first.'));
-            return;
-        }
-
-        const spinner = ora(`Generating scenarios for ${url}...`).start();
-        try {
-            const response = await axios.post(`${backendUrl}/api/instant/generate`, {
-                url,
-                description: options.description
+            const response = await axios.post(`${BACKEND_URL}/api/cli/login`, {
+                api_key: apiKey,
             });
-            spinner.succeed(chalk.green('Generation complete!'));
 
-            const data = response.data;
-            const steps = data.steps || data.scenarios || [];
-
-            fs.writeFileSync(options.output, JSON.stringify({ ...data, steps }, null, 2));
-
-            console.log(chalk.bold.cyan('\nGenerated Steps:'));
-            if (steps.length === 0) {
-                console.log(chalk.yellow('No steps were generated.'));
+            if (response.data.success) {
+                config.set("api_key", apiKey);
+                config.set("user", response.data.user);
+                spinner.succeed(chalk.green(`Successfully logged in as ${response.data.user.email}!`));
             } else {
-                steps.forEach((step, index) => {
-                    let action = `${index + 1}. ${step.actionType}: `;
-                    if (step.actionType === 'Click Element') action += step.details?.element || 'Unknown element';
-                    else if (step.actionType === 'Fill Input') action += `${step.details?.description || 'field'} -> ${step.details?.value || 'value'}`;
-                    else if (step.actionType === 'AI Visual Assertion') action += step.question;
-                    else if (step.actionType === 'Delay') action += `${step.delayTime}ms`;
-                    console.log(action);
-                });
+                spinner.fail(chalk.red("Authentication failed. Invalid API Key."));
             }
-
-            console.log(chalk.green(`\nScenario saved to ${options.output}`));
         } catch (error) {
-            spinner.fail(chalk.red(`Generation failed: ${error.message}`));
+            spinner.fail(chalk.red("Error connecting to server."));
             if (error.response) {
-                console.error(chalk.gray(JSON.stringify(error.response.data, null, 2)));
+                console.error(chalk.red(error.response.data.error || error.message));
+            } else {
+                console.error(chalk.red(error.message));
             }
         }
     });
 
-// browsingbee run <scenario-file>
 program
-    .command('run')
-    .description('Execute a generated test scenario')
-    .argument('<scenario-file>', 'Path to the JSON scenario file')
-    .option('-v, --verbose', 'Save all intermediate screenshots (before/after steps)')
-    .action(async (file, options) => {
-        const backendUrl = process.env.BACKEND_URL;
-        if (!backendUrl) {
-            console.log(chalk.yellow('Please run "browsingbee init" first.'));
+    .command("run")
+    .description("Run a browser test")
+    .option("--name <name>", "Name of the test")
+    .option("--url <url>", "Starting URL for the test")
+    .option("-d, --description <text>", "Description of the test task (enables AI step generation)")
+    .action(async (options) => {
+        const apiKey = config.get("api_key");
+
+        if (!apiKey) {
+            console.log(chalk.red("You are not logged in. Please run 'browsingbee login' first."));
             return;
         }
 
-        if (!fs.existsSync(file)) {
-            console.log(chalk.red(`File not found: ${file}`));
-            return;
+        let { name, url, description } = options;
+
+        if (!name || !url) {
+            const answers = await inquirer.prompt([
+                {
+                    type: "input",
+                    name: "name",
+                    message: "Test Name:",
+                    when: !name,
+                    validate: (input) => (input ? true : "Test Name is required"),
+                },
+                {
+                    type: "input",
+                    name: "url",
+                    message: "Start URL:",
+                    when: !url,
+                    validate: (input) => (input ? true : "URL is required"),
+                },
+            ]);
+            name = name || answers.name;
+            url = url || answers.url;
         }
 
-        const scenario = JSON.parse(fs.readFileSync(file, 'utf8'));
-        const testId = `cli-${Date.now()}`;
-        const spinner = ora('Initializing execution...').start();
-
-        // Start listening to live updates
-        const listener = listenToLiveUpdates(backendUrl, testId, {
-            verbose: options.verbose
-        });
-
-        // Give SSE a moment to establish connection
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        const spinner = ora(`Initializing test "${name}"...`).start();
 
         try {
-            const payload = {
-                startUrl: scenario.url,
-                name: scenario.name || `CLI Run: ${scenario.url}`,
-                steps: scenario.steps || scenario.scenarios || [],
-                testId: testId,
-                email: scenario.email || 'cli-user@example.com',
-                runId: `run-${Date.now()}`
+            const response = await axios.post(`${BACKEND_URL}/api/cli/run-test`, {
+                api_key: apiKey,
+                name,
+                url,
+                description, // Pass description to the backend
+            });
+
+            if (response.data.success) {
+                spinner.succeed(chalk.green("Test initialized successfully!"));
+                const { testId } = response.data;
+
+                console.log(chalk.blue(`\nStreaming logs for Test ID: ${testId}\n`));
+
+                const eventSource = new EventSource(`${BACKEND_URL}/api/test-stream/${testId}`);
+
+                eventSource.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+
+                        if (data.type === 'connected') {
+                            console.log(chalk.gray("Connected to log stream..."));
+                        } else if (data.type === 'completed') {
+                            console.log(chalk.bold.green(`\nTest execution finished!`));
+                            console.log(chalk.bold.green(`View results at: https://browsingbee.com/b/${testId}`));
+                            eventSource.close();
+                            // Optional: exit process if this is the only thing running
+                            process.exit(0);
+                        } else if (data.message) {
+                            // Format status
+                            let statusColor = chalk.white;
+                            if (data.status === 'success') statusColor = chalk.green;
+                            else if (data.status === 'error') statusColor = chalk.red;
+                            else if (data.status === 'info') statusColor = chalk.blue;
+                            else if (data.status === 'warning') statusColor = chalk.yellow;
+
+                            console.log(`${chalk.gray(`[${data.timestamp || new Date().toLocaleTimeString()}]`)} ${statusColor(data.status?.toUpperCase() || 'INFO')}: ${data.message}`);
+                        }
+                    } catch (e) {
+                        // console.log("Raw:", event.data);
+                    }
+                };
+
+                eventSource.onerror = (err) => {
+                    // console.error("Stream disrupted.");
+                    // Do not exit on error immediately as it might be temporary or connection drop
+                };
+            } else {
+                spinner.fail(chalk.red("Failed to start test."));
+            }
+        } catch (error) {
+            spinner.fail(chalk.red("Error executing test."));
+            if (error.response) {
+                console.error(chalk.red(error.response.data.error || error.message));
+            } else {
+                console.error(chalk.red(error.message));
+            }
+        }
+    });
+
+program
+    .command("list")
+    .description("List all tests")
+    .action(async () => {
+        const apiKey = config.get("api_key");
+        if (!apiKey) {
+            console.log(chalk.red("Please login first."));
+            return;
+        }
+
+        const spinner = ora("Fetching tests...").start();
+        try {
+            const { data } = await axios.get(`${BACKEND_URL}/api/cli/tests`, {
+                headers: { "x-api-key": apiKey }
+            });
+            spinner.stop();
+
+            if (data.success) {
+                if (data.tests.length === 0) {
+                    console.log(chalk.yellow("No tests found."));
+                    return;
+                }
+                console.table(data.tests.map(t => ({
+                    ID: t.id,
+                    Name: t.name,
+                    Status: t.status || "N/A",
+                    "Latest Run": t.latest_run || "N/A",
+                    Created: new Date(t.created_at).toLocaleDateString()
+                })));
+            }
+        } catch (error) {
+            spinner.fail(chalk.red("Failed to fetch tests"));
+            console.error(error.message);
+        }
+    });
+
+program
+    .command("history <testId>")
+    .description("Get test history")
+    .action(async (testId) => {
+        const apiKey = config.get("api_key");
+        if (!apiKey) return console.log(chalk.red("Please login first."));
+
+        const spinner = ora("Fetching history...").start();
+        try {
+            const { data } = await axios.get(`${BACKEND_URL}/api/cli/history/${testId}`, {
+                headers: { "x-api-key": apiKey }
+            });
+            spinner.stop();
+
+            if (data.history && data.history.length > 0) {
+                console.table(data.history);
+            } else {
+                console.log(chalk.yellow("No history available for this test."));
+            }
+        } catch (error) {
+            spinner.fail(chalk.red("Failed to fetch history"));
+        }
+    });
+
+program
+    .command("credits")
+    .description("Check your credits")
+    .action(async () => {
+        const apiKey = config.get("api_key");
+        if (!apiKey) return console.log(chalk.red("Please login first."));
+
+        const spinner = ora("Fetching credits...").start();
+        try {
+            const { data } = await axios.get(`${BACKEND_URL}/api/cli/credits`, {
+                headers: { "x-api-key": apiKey }
+            });
+            spinner.stop();
+
+            if (data.success) {
+                const c = data.credits;
+                console.log(chalk.bold(`Plan: ${chalk.cyan(c.plan)}`));
+                console.log(`Total: ${c.total}`);
+                console.log(`Used: ${chalk.yellow(c.used)}`);
+                console.log(`Remaining: ${chalk.green(c.remaining)}`);
+            }
+        } catch (error) {
+            spinner.fail(chalk.red("Failed to fetch credits"));
+        }
+    });
+
+program
+    .command("status <runId>")
+    .description("Check run status")
+    .action(async (runId) => {
+        const apiKey = config.get("api_key");
+        if (!apiKey) return console.log(chalk.red("Please login first."));
+
+        try {
+            const { data } = await axios.get(`${BACKEND_URL}/api/cli/status/${runId}`, {
+                headers: { "x-api-key": apiKey }
+            });
+
+            if (data.success) {
+                console.log(`Status: ${chalk.bold(data.status)}`);
+                if (data.screenshot) {
+                    console.log(`Screenshot: ${data.screenshot}`);
+                }
+                if (data.logs) {
+                    console.log(chalk.bold("\nLatest Logs:"));
+                    data.logs.slice(-5).forEach(log => {
+                        console.log(`[${log.status || 'info'}] ${log.message}`);
+                    });
+                }
+            }
+        } catch (error) {
+            console.error(chalk.red("Failed to fetch status"));
+        }
+    });
+
+program
+    .command("interactive")
+    .description("Interactive mode")
+    .action(async () => {
+        const apiKey = config.get("api_key");
+        if (!apiKey) return console.log(chalk.red("Please login first."));
+
+        // 1. Fetch Tests
+        const spinner = ora("Fetching tests...").start();
+        let tests = [];
+        try {
+            const res = await axios.get(`${BACKEND_URL}/api/cli/tests`, { headers: { "x-api-key": apiKey } });
+            tests = res.data.tests;
+            spinner.stop();
+        } catch (err) {
+            spinner.fail("Failed to load tests.");
+            return;
+        }
+
+        if (tests.length === 0) {
+            console.log(chalk.yellow("No tests to select."));
+            return;
+        }
+
+        // 2. Select Test
+        const { selectedTest } = await inquirer.prompt([{
+            type: 'list',
+            name: 'selectedTest',
+            message: 'Select a test:',
+            choices: tests.map(t => ({ name: `${t.name} (ID: ${t.id})`, value: t }))
+        }]);
+
+        // 3. Select Action
+        const { action } = await inquirer.prompt([{
+            type: 'list',
+            name: 'action',
+            message: `Action for "${selectedTest.name}":`,
+            choices: [
+                { name: 'Run Test', value: 'run' },
+                { name: 'Edit & Run', value: 'edit_run' },
+                { name: 'View History', value: 'history' },
+                { name: 'Back/Exit', value: 'exit' }
+            ]
+        }]);
+
+        if (action === 'run' || action === 'edit_run') {
+            let runPayload = {
+                api_key: apiKey,
+                name: selectedTest.name, // Will be ignored by backend effectively if testId is present, but kept for schema validation if strictly needed
+                url: selectedTest.url || "https://google.com",
+                testId: selectedTest.id // PASS TEST ID FOR RE-RUN
             };
 
-            const response = await axios.post(`${backendUrl}/run-scenario`, payload, {
-                timeout: 600000 // 10 minutes timeout for execution
-            });
-            spinner.succeed(chalk.green('Execution complete!'));
+            if (action === 'edit_run') {
+                const editAnswers = await inquirer.prompt([
+                    {
+                        type: 'input',
+                        name: 'url',
+                        message: 'Enter URL (leave blank to keep current):',
+                        default: selectedTest.url
+                    },
+                    {
+                        type: 'input',
+                        name: 'description',
+                        message: 'Enter Description to (re)generate steps (leave blank to keep current steps):',
+                    }
+                ]);
 
-            if (response.data.tokenUsage) {
-                console.log('\n' + chalk.bold.cyan('=== Token Usage ==='));
-                console.log(`${chalk.bold('Total Tokens:')} ${response.data.tokenUsage.totalTokens}`);
-                console.log(`${chalk.bold('Estimated Cost:')} $${response.data.tokenUsage.estimatedCost}`);
+                if (editAnswers.url) runPayload.url = editAnswers.url;
+                if (editAnswers.description) runPayload.description = editAnswers.description;
             }
-        } catch (error) {
-            spinner.fail(chalk.red(`Execution failed: ${error.message}`));
-            listener.close();
+
+            // Reuse the run logic manually or call separate function. 
+            // For simplicity, calling the API directly here.
+            const spinner = ora(`Initializing test "${selectedTest.name}"...`).start();
+            try {
+                const response = await axios.post(`${BACKEND_URL}/api/cli/run-test`, runPayload);
+
+                if (response.data.success) {
+                    spinner.succeed(chalk.green("Test initialized!"));
+                    const { testId } = response.data;
+                    console.log(chalk.blue(`Streaming logs for Test ID: ${testId}`));
+
+                    const eventSource = new EventSource(`${BACKEND_URL}/api/test-stream/${testId}`);
+                    eventSource.onmessage = (event) => {
+                        try {
+                            const d = JSON.parse(event.data);
+                            if (d.message) console.log(`[${d.status}] ${d.message}`);
+                        } catch (e) { }
+                    };
+                    console.log(chalk.bold.green(`\nTest completed! View results at: https://browsingbee.com/b/${testId}`));
+                }
+            } catch (err) {
+                spinner.fail("Failed to run test.");
+            }
+        } else if (action === 'history') {
+            // Call history logic
+            const { data } = await axios.get(`${BACKEND_URL}/api/cli/history/${selectedTest.id}`, {
+                headers: { "x-api-key": apiKey }
+            });
+            console.table(data.history);
         }
     });
 
-program.parse();
+program.parse(process.argv);
