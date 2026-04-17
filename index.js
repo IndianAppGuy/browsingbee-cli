@@ -14,7 +14,8 @@ const EventSource = esModule.EventSource || esModule;
 const program = new Command();
 const config = new Conf({ projectName: "browsing-bee-cli" });
 
-const BACKEND_URL = "http://localhost:3005"; // Default local development URL
+// const BACKEND_URL = "http://localhost:3005"; // Default local development URL
+const BACKEND_URL = process.env.BROWSINGBEE_API_URL || "https://browsingbee-cli-next-backend.onrender.com";
 
 function normalizeLegacyRunTestArgv(argv) {
     return argv.map((arg) => {

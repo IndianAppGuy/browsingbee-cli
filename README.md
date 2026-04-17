@@ -1,40 +1,144 @@
 # BrowsingBee CLI
 
-Accelerate web automation with Instant Research and Test Generation directly from your terminal.
+Run BrowsingBee browser automation tests from your terminal.
 
 ## Installation
 
+Install the CLI globally from npm:
+
 ```bash
-cd browsing-bee-cli
+npm install -g browsing-bee-cli
+```
+
+Then confirm it is available:
+
+```bash
+browsingbee --help
+```
+
+For local development from this repository:
+
+```bash
+npm install
 npm link
 ```
 
+## Authentication
+
+Login with your BrowsingBee API key:
+
+```bash
+browsingbee login
+```
+
+You can also pass the API key directly:
+
+```bash
+browsingbee login --api_key YOUR_API_KEY
+```
+
+The CLI stores your API key locally so future commands can use it.
+
 ## Commands
 
-### 1. Initialize
-Setup the connection to the BrowsingBee backend.
+### Login
+
+Authenticate the CLI:
+
 ```bash
-browsingbee init
+browsingbee login
 ```
 
-### 2. Research
-Understand a website's structure before generating tests.
+### Run a New Test
+
+Create and run a browser test:
+
 ```bash
-browsingbee research <url>
+browsingbee run --name "Login smoke test" --url "https://example.com" --description "Verify the user can log in"
 ```
 
-### 3. Generate
-Transform a URL into executable test scenarios.
+If `--name` or `--url` is missing, the CLI will ask for it interactively.
+
+### Use Skill
+
+Run an existing BrowsingBee skill or saved test by ID:
+
 ```bash
-browsingbee generate <url> --description "Verify login works" --output scenario.json
+browsingbee use-skill --id 123
 ```
 
-### 4. Run
-Execute a generated test locally via the backend.
+You can pass runtime variables as additional options. These are sent to BrowsingBee with the run request:
+
 ```bash
-browsingbee run scenario.json
+browsingbee use-skill --id 123 --email "user@example.com" --password "secret"
 ```
 
-## Architecture
+In the example above, `email` and `password` are runtime variables.
 
-The CLI acts as a bridge to the BrowsingBee Backend which uses OpenAI and ScrapingBee to analyze and automate web interactions.
+### List Tests
+
+List all tests available for your account:
+
+```bash
+browsingbee list
+```
+
+### Test History
+
+View previous runs for a test:
+
+```bash
+browsingbee history 123
+```
+
+### Credits
+
+Check your current plan and remaining credits:
+
+```bash
+browsingbee credits
+```
+
+### Status
+
+Check the status of a run:
+
+```bash
+browsingbee status RUN_ID
+```
+
+### Interactive Mode
+
+Select and run tests from an interactive terminal menu:
+
+```bash
+browsingbee interactive
+```
+
+## Publishing
+
+Before publishing, make sure the CLI points to the production BrowsingBee backend instead of a local development server.
+
+Check what npm will include:
+
+```bash
+npm pack --dry-run
+```
+
+Publish to npm:
+
+```bash
+npm publish
+```
+
+For future releases, bump the version first:
+
+```bash
+npm version patch
+npm publish
+```
+
+## Requirements
+
+- Node.js 18 or newer
+- A BrowsingBee API key
