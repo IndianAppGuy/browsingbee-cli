@@ -16,6 +16,62 @@ const config = new Conf({ projectName: "browsing-bee-cli" });
 
 const BACKEND_URL = "http://localhost:3005"; // Default local development URL
 
+function normalizeLegacyRunTestArgv(argv) {
+    return argv.map((arg) => {
+        if (arg === "-id") return "--id";
+        if (arg.startsWith("-id=")) return `--id=${arg.slice(4)}`;
+        return arg;
+    });
+}
+
+function extractRuntimeVariablesFromRawArgs(rawArgs, commandName, reservedKeys = new Set()) {
+    const commandIndex = rawArgs.indexOf(commandName);
+    if (commandIndex === -1) {
+        return {};
+    }
+
+    const commandArgs = rawArgs.slice(commandIndex + 1);
+    const runtimeVariables = {};
+
+    for (let i = 0; i < commandArgs.length; i++) {
+        const arg = commandArgs[i];
+        if (!arg.startsWith("--") || arg === "--") {
+            continue;
+        }
+
+        const optionBody = arg.slice(2);
+        if (!optionBody) {
+            continue;
+        }
+
+        let key;
+        let value;
+
+        if (optionBody.includes("=")) {
+            const splitIndex = optionBody.indexOf("=");
+            key = optionBody.slice(0, splitIndex);
+            value = optionBody.slice(splitIndex + 1);
+        } else {
+            key = optionBody;
+            const nextValue = commandArgs[i + 1];
+            if (nextValue && !nextValue.startsWith("-")) {
+                value = nextValue;
+                i += 1;
+            } else {
+                value = "true";
+            }
+        }
+
+        if (!key || reservedKeys.has(key)) {
+            continue;
+        }
+
+        runtimeVariables[key] = value;
+    }
+
+    return runtimeVariables;
+}
+
 program
     .name("browsingbee")
     .description("CLI for BrowsingBee - Automate your browser tasks")
@@ -149,6 +205,93 @@ program
                 eventSource.onerror = (err) => {
                     // console.error("Stream disrupted.");
                     // Do not exit on error immediately as it might be temporary or connection drop
+                };
+            } else {
+                spinner.fail(chalk.red("Failed to start test."));
+            }
+        } catch (error) {
+            spinner.fail(chalk.red("Error executing test."));
+            if (error.response) {
+                console.error(chalk.red(error.response.data.error || error.message));
+            } else {
+                console.error(chalk.red(error.message));
+            }
+        }
+    });
+
+program
+    .command("use-skill")
+    .description("Run an existing test by ID")
+    .requiredOption("--id <id>", "ID of the existing test to run")
+    .allowUnknownOption(true)
+    .allowExcessArguments(true)
+    .action(async (options, command) => {
+        const apiKey = config.get("api_key");
+
+        if (!apiKey) {
+            console.log(chalk.red("You are not logged in. Please run 'browsingbee login' first."));
+            return;
+        }
+
+        const testId = String(options.id || "").trim();
+        if (!testId) {
+            console.log(chalk.red("Test ID is required. Example: browsingbee use-skill --id=6"));
+            return;
+        }
+
+        const runtimeVariables = extractRuntimeVariablesFromRawArgs(
+            command.parent.rawArgs,
+            "use-skill",
+            new Set(["id"])
+        );
+
+        const spinner = ora(`Initializing test "${testId}"...`).start();
+
+        try {
+            const response = await axios.post(`${BACKEND_URL}/api/cli/run-test`, {
+                api_key: apiKey,
+                testId,
+                runtimeVariables,
+            });
+
+            if (response.data.success) {
+                spinner.succeed(chalk.green("Test initialized successfully!"));
+                const responseTestId = response.data.testId;
+
+                if (Object.keys(runtimeVariables).length > 0) {
+                    console.log(chalk.gray(`Using runtime variables: ${Object.keys(runtimeVariables).join(", ")}`));
+                }
+                console.log(chalk.blue(`\nStreaming logs for Test ID: ${responseTestId}\n`));
+
+                const eventSource = new EventSource(`${BACKEND_URL}/api/test-stream/${responseTestId}`);
+
+                eventSource.onmessage = (event) => {
+                    try {
+                        const data = JSON.parse(event.data);
+
+                        if (data.type === 'connected') {
+                            console.log(chalk.gray("Connected to log stream..."));
+                        } else if (data.type === 'completed') {
+                            console.log(chalk.bold.green(`\nTest execution finished!`));
+                            console.log(chalk.bold.green(`View results at: https://browsingbee.com/b/${responseTestId}`));
+                            eventSource.close();
+                            process.exit(0);
+                        } else if (data.message) {
+                            let statusColor = chalk.white;
+                            if (data.status === 'success') statusColor = chalk.green;
+                            else if (data.status === 'error') statusColor = chalk.red;
+                            else if (data.status === 'info') statusColor = chalk.blue;
+                            else if (data.status === 'warning') statusColor = chalk.yellow;
+
+                            console.log(`${chalk.gray(`[${data.timestamp || new Date().toLocaleTimeString()}]`)} ${statusColor(data.status?.toUpperCase() || 'INFO')}: ${data.message}`);
+                        }
+                    } catch (e) {
+                        // no-op
+                    }
+                };
+
+                eventSource.onerror = () => {
+                    // Do not exit on stream disruption
                 };
             } else {
                 spinner.fail(chalk.red("Failed to start test."));
@@ -382,4 +525,4 @@ program
         }
     });
 
-program.parse(process.argv);
+program.parse(normalizeLegacyRunTestArgv(process.argv));
