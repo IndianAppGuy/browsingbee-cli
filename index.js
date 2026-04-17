@@ -73,6 +73,62 @@ function extractRuntimeVariablesFromRawArgs(rawArgs, commandName, reservedKeys =
     return runtimeVariables;
 }
 
+function normalizeLegacyRunTestArgv(argv) {
+    return argv.map((arg) => {
+        if (arg === "-id") return "--id";
+        if (arg.startsWith("-id=")) return `--id=${arg.slice(4)}`;
+        return arg;
+    });
+}
+
+function extractRuntimeVariablesFromRawArgs(rawArgs, commandName, reservedKeys = new Set()) {
+    const commandIndex = rawArgs.indexOf(commandName);
+    if (commandIndex === -1) {
+        return {};
+    }
+
+    const commandArgs = rawArgs.slice(commandIndex + 1);
+    const runtimeVariables = {};
+
+    for (let i = 0; i < commandArgs.length; i++) {
+        const arg = commandArgs[i];
+        if (!arg.startsWith("--") || arg === "--") {
+            continue;
+        }
+
+        const optionBody = arg.slice(2);
+        if (!optionBody) {
+            continue;
+        }
+
+        let key;
+        let value;
+
+        if (optionBody.includes("=")) {
+            const splitIndex = optionBody.indexOf("=");
+            key = optionBody.slice(0, splitIndex);
+            value = optionBody.slice(splitIndex + 1);
+        } else {
+            key = optionBody;
+            const nextValue = commandArgs[i + 1];
+            if (nextValue && !nextValue.startsWith("-")) {
+                value = nextValue;
+                i += 1;
+            } else {
+                value = "true";
+            }
+        }
+
+        if (!key || reservedKeys.has(key)) {
+            continue;
+        }
+
+        runtimeVariables[key] = value;
+    }
+
+    return runtimeVariables;
+}
+
 program
     .name("browsingbee")
     .description("CLI for BrowsingBee - Automate your browser tasks")
