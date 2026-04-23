@@ -14,8 +14,8 @@ const EventSource = esModule.EventSource || esModule;
 const program = new Command();
 const config = new Conf({ projectName: "browsing-bee-cli" });
 
-// const BACKEND_URL = "http://localhost:3005"; // Default local development URL
-const BACKEND_URL = process.env.BROWSINGBEE_API_URL || "https://browsingbee-cli-next-backend.onrender.com";
+const BACKEND_URL = "http://localhost:3005"; // Default local development URL
+// const BACKEND_URL = process.env.BACKEND_URL || "https://browsingbee-cli-next-backend.onrender.com";
 
 function normalizeLegacyRunTestArgv(argv) {
     return argv.map((arg) => {
@@ -128,6 +128,9 @@ program
     .option("--name <name>", "Name of the test")
     .option("--url <url>", "Starting URL for the test")
     .option("-d, --description <text>", "Description of the test task (enables AI step generation)")
+    .option("--use_session <domain>", "Use a saved session for the specified domain")
+    .option("--save_session", "Save the session after successful completion")
+    .option("--session_domain <domain>", "Domain key to save the session under")
     .action(async (options) => {
         const apiKey = config.get("api_key");
 
@@ -167,6 +170,10 @@ program
                 name,
                 url,
                 description, // Pass description to the backend
+                // Session Persistence
+                use_session_domain: options.use_session,
+                save_session: options.save_session,
+                session_domain: options.session_domain || (url ? new URL(url).hostname : null)
             });
 
             if (response.data.success) {
@@ -225,6 +232,9 @@ program
     .command("use-skill")
     .description("Run an existing test by ID")
     .requiredOption("--id <id>", "ID of the existing test to run")
+    .option("--use_session <domain>", "Use a saved session for the specified domain")
+    .option("--save_session", "Save the session after successful completion")
+    .option("--session_domain <domain>", "Domain key to save the session under")
     .allowUnknownOption(true)
     .allowExcessArguments(true)
     .action(async (options, command) => {
@@ -244,7 +254,7 @@ program
         const runtimeVariables = extractRuntimeVariablesFromRawArgs(
             command.parent.rawArgs,
             "use-skill",
-            new Set(["id"])
+            new Set(["id", "use_session", "save_session", "session_domain"])
         );
 
         const spinner = ora(`Initializing test "${testId}"...`).start();
@@ -254,6 +264,10 @@ program
                 api_key: apiKey,
                 testId,
                 runtimeVariables,
+                // Session Persistence
+                use_session_domain: options.use_session,
+                save_session: options.save_session,
+                session_domain: options.session_domain
             });
 
             if (response.data.success) {
@@ -424,6 +438,52 @@ program
     });
 
 program
+    .command("sessions")
+    .description("Manage saved browser sessions")
+    .option("--clear <domain>", "Clear saved session for a specific domain")
+    .action(async (options) => {
+        const apiKey = config.get("api_key");
+        if (!apiKey) return console.log(chalk.red("Please login first."));
+
+        if (options.clear) {
+            const spinner = ora(`Clearing session for ${options.clear}...`).start();
+            try {
+                await axios.delete(`${BACKEND_URL}/api/cli/clear-session`, {
+                    data: { api_key: apiKey, domain: options.clear }
+                });
+                spinner.succeed(chalk.green(`Cleared session for ${options.clear}`));
+            } catch (error) {
+                spinner.fail(chalk.red("Failed to clear session"));
+            }
+            return;
+        }
+
+        const spinner = ora("Fetching saved sessions...").start();
+        try {
+            const { data } = await axios.get(`${BACKEND_URL}/api/cli/list-sessions`, {
+                headers: { "x-api-key": apiKey }
+            });
+            spinner.stop();
+
+            if (data.success) {
+                if (data.sessions.length === 0) {
+                    console.log(chalk.yellow("No active sessions found."));
+                    return;
+                }
+                console.log(chalk.bold("\nActive Browser Sessions:"));
+                console.table(data.sessions.map(s => ({
+                    Domain: s.key.split('__')[1] || s.key,
+                    "Saved At": new Date(s.savedAt).toLocaleString(),
+                    "Age (Hours)": s.ageHours,
+                    "Expires In (Hours)": s.expiresInHours
+                })));
+            }
+        } catch (error) {
+            spinner.fail(chalk.red("Failed to fetch sessions"));
+        }
+    });
+
+program
     .command("interactive")
     .description("Interactive mode")
     .action(async () => {
@@ -488,11 +548,34 @@ program
                         type: 'input',
                         name: 'description',
                         message: 'Enter Description to (re)generate steps (leave blank to keep current steps):',
+                    },
+                    {
+                        type: 'confirm',
+                        name: 'useSession',
+                        message: 'Use a saved session?',
+                        default: false
+                    },
+                    {
+                        type: 'input',
+                        name: 'useSessionDomain',
+                        message: 'Enter domain for saved session (e.g. magicslides.app):',
+                        when: (answers) => answers.useSession
+                    },
+                    {
+                        type: 'confirm',
+                        name: 'saveSession',
+                        message: 'Save session after run?',
+                        default: false
                     }
                 ]);
 
                 if (editAnswers.url) runPayload.url = editAnswers.url;
                 if (editAnswers.description) runPayload.description = editAnswers.description;
+                if (editAnswers.useSessionDomain) runPayload.use_session_domain = editAnswers.useSessionDomain;
+                if (editAnswers.saveSession) {
+                    runPayload.save_session = true;
+                    runPayload.session_domain = editAnswers.useSessionDomain || (runPayload.url ? new URL(runPayload.url).hostname : null);
+                }
             }
 
             // Reuse the run logic manually or call separate function. 
