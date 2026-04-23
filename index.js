@@ -128,11 +128,12 @@ program
     .option("--name <name>", "Name of the test")
     .option("--url <url>", "Starting URL for the test")
     .option("-d, --description <text>", "Description of the test task (enables AI step generation)")
+    .option("--apikey <key>", "BrowsingBee API Key")
     .action(async (options) => {
-        const apiKey = config.get("api_key");
+        const apiKey = options.apikey || config.get("api_key");
 
         if (!apiKey) {
-            console.log(chalk.red("You are not logged in. Please run 'browsingbee login' first."));
+            console.log(chalk.red("You are not logged in. Please run 'browsingbee login' or provide --apikey."));
             return;
         }
 
@@ -225,13 +226,14 @@ program
     .command("use-skill")
     .description("Run an existing test by ID")
     .requiredOption("--id <id>", "ID of the existing test to run")
+    .option("--apikey <key>", "BrowsingBee API Key")
     .allowUnknownOption(true)
     .allowExcessArguments(true)
     .action(async (options, command) => {
-        const apiKey = config.get("api_key");
+        const apiKey = options.apikey || config.get("api_key");
 
         if (!apiKey) {
-            console.log(chalk.red("You are not logged in. Please run 'browsingbee login' first."));
+            console.log(chalk.red("You are not logged in. Please run 'browsingbee login' or provide --apikey."));
             return;
         }
 
@@ -311,10 +313,11 @@ program
 program
     .command("list")
     .description("List all tests")
-    .action(async () => {
-        const apiKey = config.get("api_key");
+    .option("--apikey <key>", "BrowsingBee API Key")
+    .action(async (options) => {
+        const apiKey = options.apikey || config.get("api_key");
         if (!apiKey) {
-            console.log(chalk.red("Please login first."));
+            console.log(chalk.red("Please login first or provide --apikey."));
             return;
         }
 
@@ -347,9 +350,10 @@ program
 program
     .command("history <testId>")
     .description("Get test history")
-    .action(async (testId) => {
-        const apiKey = config.get("api_key");
-        if (!apiKey) return console.log(chalk.red("Please login first."));
+    .option("--apikey <key>", "BrowsingBee API Key")
+    .action(async (testId, options) => {
+        const apiKey = options.apikey || config.get("api_key");
+        if (!apiKey) return console.log(chalk.red("Please login first or provide --apikey."));
 
         const spinner = ora("Fetching history...").start();
         try {
@@ -371,9 +375,10 @@ program
 program
     .command("credits")
     .description("Check your credits")
-    .action(async () => {
-        const apiKey = config.get("api_key");
-        if (!apiKey) return console.log(chalk.red("Please login first."));
+    .option("--apikey <key>", "BrowsingBee API Key")
+    .action(async (options) => {
+        const apiKey = options.apikey || config.get("api_key");
+        if (!apiKey) return console.log(chalk.red("Please login first or provide --apikey."));
 
         const spinner = ora("Fetching credits...").start();
         try {
@@ -397,9 +402,10 @@ program
 program
     .command("status <runId>")
     .description("Check run status")
-    .action(async (runId) => {
-        const apiKey = config.get("api_key");
-        if (!apiKey) return console.log(chalk.red("Please login first."));
+    .option("--apikey <key>", "BrowsingBee API Key")
+    .action(async (runId, options) => {
+        const apiKey = options.apikey || config.get("api_key");
+        if (!apiKey) return console.log(chalk.red("Please login first or provide --apikey."));
 
         try {
             const { data } = await axios.get(`${BACKEND_URL}/api/cli/status/${runId}`, {
