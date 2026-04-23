@@ -31,10 +31,10 @@ Login with your BrowsingBee API key:
 browsingbee login
 ```
 
-You can also pass the API key directly:
+You can also pass the API key directly for a one-liner login:
 
 ```bash
-browsingbee login --api_key YOUR_API_KEY
+browsingbee login --apikey YOUR_API_KEY
 ```
 
 The CLI stores your API key locally so future commands can use it.
@@ -73,7 +73,34 @@ You can pass runtime variables as additional options. These are sent to Browsing
 browsingbee use-skill --id 123 --email "user@example.com" --password "secret"
 ```
 
-In the example above, `email` and `password` are runtime variables.
+### Session Management
+
+BrowsingBee supports session persistence, allowing you to save browser state (like login cookies) and reuse it in future runs.
+
+#### Save a Session
+To save the session after a successful run, use the `--save_session` flag:
+
+```bash
+browsingbee run --url "https://magicslides.app" --save_session
+```
+
+#### Use a Saved Session
+To reuse a previously saved session for a specific domain, use the `--use_session` flag:
+
+```bash
+browsingbee run --url "https://magicslides.app" --use_session "magicslides.app"
+```
+
+#### Manage Sessions
+List all active sessions or clear them:
+
+```bash
+# List all saved sessions
+browsingbee sessions
+
+# Clear a specific session
+browsingbee sessions --clear "magicslides.app"
+```
 
 ### List Tests
 
@@ -109,7 +136,7 @@ browsingbee status RUN_ID
 
 ### Interactive Mode
 
-Select and run tests from an interactive terminal menu:
+Select and run tests from an interactive terminal menu. You can also configure session options within the interactive menu:
 
 ```bash
 browsingbee interactive
