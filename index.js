@@ -73,10 +73,12 @@ function extractRuntimeVariablesFromRawArgs(rawArgs, commandName, reservedKeys =
     return runtimeVariables;
 }
 
+const pkg = require("./package.json");
+
 program
     .name("browsingbee")
     .description("CLI for BrowsingBee - Automate your browser tasks")
-    .version("1.0.0");
+    .version(pkg.version);
 
 program
     .command("login")
