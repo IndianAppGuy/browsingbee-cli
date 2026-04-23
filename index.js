@@ -82,8 +82,9 @@ program
     .command("login")
     .description("Login with your API Key")
     .option("--api_key <key>", "Your BrowsingBee API Key")
+    .option("--apikey <key>", "Your BrowsingBee API Key (alternative)")
     .action(async (options) => {
-        let apiKey = options.api_key;
+        let apiKey = options.api_key || options.apikey;
 
         if (!apiKey) {
             const answers = await inquirer.prompt([
